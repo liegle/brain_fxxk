@@ -1,8 +1,12 @@
 mod program;
+mod tape;
+mod context;
 
 use std::{env::ArgsOs, ffi::OsString, ops::RangeBounds, str::FromStr, fs, process};
 
+use context::Context;
 use program::Program;
+use tape::Tape;
 
 pub fn run(config: Config) {
     let program = match fs::read_to_string(config.path) {
@@ -11,19 +15,20 @@ pub fn run(config: Config) {
                 Ok(program) => program,
                 Err(err) => {
                     println!("{err}");
-                    process::exit(0);
+                    process::exit(1);
                 }
             }
         },
         Err(err) => {
             println!("{err}");
-            process::exit(0);
+            process::exit(1);
         }
     };
-    program.print();
+    let tape = Tape::new(config.tape_length);
+    let context = Context::new(program, tape);
 }
 
-enum Overflow { Block, Overflow, Exit }
+pub enum Overflow { Block, Overflow, Exit }
 
 pub struct Config {
     path: OsString,
@@ -37,7 +42,7 @@ pub struct Config {
 const KEY_VALUE_PAIRS: &str = "\
 Keys                      Values\n\
 overflow                  Block | Overflow | Exit\n\
-tape_length               int in (0, 4096]\n\
+tape_length               int in (0, 256]\n\
 window_width              int in (0, 64]\n\
 tick_duration             float in [0, 3]\n\
 output_as_int             true | false";
@@ -63,9 +68,8 @@ impl Config {
                 Ok(result) => result,
                 Err(_) => return Err(format!("Parameters shouldn't contain not unicode characters in \"{:?}\"!", arg)),
             };
-            let syntax_error = Err(format!("Parameter syntax error in \"{}\"!", arg));
-            if let Err(_) = config.parse(arg) {
-                return syntax_error;
+            if let Err(discription) = config.parse(&arg) {
+                return Err(format!("Parameter syntax error in \"{}\"! {}", arg, discription));
             }
         }
         Ok(config)
@@ -75,19 +79,19 @@ impl Config {
         Config {
             path,
             overflow: Overflow::Block,
-            tape_length: 256_usize,
+            tape_length: 64_usize,
             window_width: 32_usize,
             tick_duration: 1_f64,
             output_as_int: false,
         }
     }
 
-    fn parse(&mut self, arg: String) -> Result<(), ()> {
+    fn parse(&mut self, arg: &str) -> Result<(), &'static str> {
         let lower_arg = arg.to_ascii_lowercase();
         let key_value: Vec<_> = lower_arg.split('=').collect();
 
         if key_value.len() != 2 {
-            return Err(());
+            return Err("Wrong parameter syntax, please use <key>=<value>.");
         }
 
         match key_value[0] {
@@ -95,26 +99,26 @@ impl Config {
                 "block" => Overflow::Block,
                 "overflow" => Overflow::Overflow,
                 "exit" => Overflow::Exit,
-                _ => return Err(()),
+                _ => return Err("Wrong overflow value."),
             },
-            "tape_length" => match arg_to(key_value[1], 1..=4096) {
+            "tape_length" => match arg_to(key_value[1], 1..=256) {
                 Ok(value) => self.tape_length = value,
-                Err(_) => return Err(()),
+                Err(_) => return Err("Wrong tape_length value."),
             },
             "window_width" => match arg_to(key_value[1], 1..=64) {
                 Ok(value) => self.window_width = value,
-                Err(_) => return Err(()),
+                Err(_) => return Err("Wrong window_width value."),
             },
             "tick_duration" => match arg_to(key_value[1], 0.0..=3.0) {
                 Ok(value) => self.tick_duration = value,
-                Err(_) => return Err(()),
+                Err(_) => return Err("Wrong tick_duration value."),
             },
             "output_as_int" => self.output_as_int = match key_value[1] {
                 "true" => true,
                 "false" => false,
-                _ => return Err(()),
+                _ => return Err("Wrong output_as_int value."),
             },
-            _ => return Err(()),
+            _ => return Err("Given key doesn't exist."),
         }
         Ok(())
     }

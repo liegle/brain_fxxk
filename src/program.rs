@@ -1,12 +1,14 @@
-pub struct Program {
-    code: Vec<Key>,
-}
+use std::fmt::Display;
 
 enum Key {
     Right, Left,               // > <
     Add, Sub,                  // + -
     Out, In,                   // . ,
     If(usize), Back(usize),    // [ ]
+}
+
+pub struct Program {
+    code: Vec<Key>,
 }
 
 impl Program {
@@ -64,36 +66,45 @@ impl Program {
         self.code.get(index)
     }
 
-    #[cfg(debug_assertions)]
-    pub fn print(&self) {
+    pub fn code_to_string(&self, divider: char, show_jump: bool) -> String {
         let mut out = String::new();
         for key in &self.code {
-            out += match key {
-                Key::Right => ">\n",
-                Key::Left => "<\n",
-                Key::Add => "+\n",
-                Key::Sub => "-\n",
-                Key::Out => ".\n",
-                Key::In => ",\n",
-                other => {
-                    let value = match other {
-                        Key::If(value) => {
-                            out.push('[');
-                            value
-                        },
-                        Key::Back(value) => {
-                            out.push(']');
-                            value
-                        },
-                        _ => continue, // impossible arm
-                    };
-                    out.push_str(&value.to_string());
-                    out.push('\n');
-                    continue;
-                }
-                
-            };
+            out.push(match key {
+                Key::Right => '>',
+                Key::Left => '<',
+                Key::Add => '+',
+                Key::Sub => '-',
+                Key::Out => '.',
+                Key::In => ',',
+                Key::If(value) => {
+                    if show_jump {
+                        out.push('[');
+                        out.push_str(&value.to_string());
+                        out.push(divider);
+                        continue;
+                    } else {
+                        '['
+                    }
+                },
+                Key::Back(value) => {
+                    if show_jump {
+                        out.push(']');
+                        out.push_str(&value.to_string());
+                        out.push(divider);
+                        continue;
+                    } else {
+                        ']'
+                    }
+                },
+            });
+            out.push(divider);
         }
-        println!("{out}");
+        out
+    }
+}
+
+impl Display for Program {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.code_to_string(' ', false))
     }
 }
