@@ -1,6 +1,6 @@
 use std::fmt::Display;
 
-enum Key {
+pub enum Key {
     Right, Left,               // > <
     Add, Sub,                  // + -
     Out, In,                   // . ,
@@ -45,9 +45,9 @@ impl Program {
                 Key::If(_) => stack.push((index, key)),
                 Key::Back(back_index) => match stack.pop() {
                     Some(counterpart) => {
-                        *back_index = counterpart.0 + 1;
+                        *back_index = counterpart.0;
                         if let Key::If(if_index) = counterpart.1 {
-                            *if_index = index + 1;
+                            *if_index = index;
                         }
                     }
                     None => return syntax_error,
@@ -64,6 +64,10 @@ impl Program {
 
     pub fn get(&self, index: usize) -> Option<&Key> {
         self.code.get(index)
+    }
+
+    pub fn len(&self) -> usize {
+        self.code.len()
     }
 
     pub fn code_to_string(&self, divider: char, show_jump: bool) -> String {

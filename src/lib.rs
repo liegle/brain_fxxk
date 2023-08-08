@@ -1,34 +1,34 @@
 mod program;
-mod tape;
 mod context;
 
-use std::{env::ArgsOs, ffi::OsString, ops::RangeBounds, str::FromStr, fs, process};
+use std::{env::ArgsOs, ffi::OsString, ops::RangeBounds, str::FromStr, process, thread, time::Duration};
 
-use context::Context;
-use program::Program;
-use tape::Tape;
+use context::{Context, Step};
 
 pub fn run(config: Config) {
-    let program = match fs::read_to_string(config.path) {
-        Ok(content) => {
-            match Program::from(content) {
-                Ok(program) => program,
-                Err(err) => {
-                    println!("{err}");
-                    process::exit(1);
-                }
+    let dur = Duration::from_secs_f64(config.tick_duration);
+    let mut context = Context::new(config).unwrap_or_else(|err| {
+        println!("{err}");
+        process::exit(1);
+    });
+    loop {
+        match context.step() {
+            Step::Next => thread::sleep(dur),
+            Step::End => break,
+            Step::Err(err) => {
+                println!("{err}");
+                process::exit(1);
             }
-        },
-        Err(err) => {
-            println!("{err}");
-            process::exit(1);
         }
-    };
-    let tape = Tape::new(config.tape_length);
-    let context = Context::new(program, tape);
+    }
 }
 
-pub enum Overflow { Block, Overflow, Exit }
+pub enum Overflow {
+    Block,     // 指针在边界向外移动时，什么也不发生
+    Overflow,  // 指针能移动到边界外，但实际读写的是边界的内存
+    Loop,      // 循环移动指针
+    Exit,      // 指针在边界向外移动时，立即报错退出
+}
 
 pub struct Config {
     path: OsString,
@@ -41,7 +41,7 @@ pub struct Config {
 
 const KEY_VALUE_PAIRS: &str = "\
 Keys                      Values\n\
-overflow                  Block | Overflow | Exit\n\
+overflow                  Block | Overflow | Loop | Exit\n\
 tape_length               int in (0, 256]\n\
 window_width              int in (0, 64]\n\
 tick_duration             float in [0, 3]\n\
