@@ -1,9 +1,20 @@
 mod program;
 mod context;
 
-use std::{env::ArgsOs, ffi::OsString, ops::RangeBounds, str::FromStr, process, thread, time::Duration};
+use std::{
+    env::ArgsOs,
+    ffi::OsString,
+    ops::RangeBounds,
+    str::FromStr,
+    process,
+    thread,
+    time::Duration,
+};
 
-use context::{Context, Step};
+use context::{
+    Context,
+    Step,
+};
 
 pub fn run(config: Config) {
     let dur = Duration::from_secs_f64(config.tick_duration);
@@ -11,9 +22,13 @@ pub fn run(config: Config) {
         println!("{err}");
         process::exit(1);
     });
+
     loop {
         match context.step() {
-            Step::Next => thread::sleep(dur),
+            Step::Next => {
+                context.refresh();
+                thread::sleep(dur);
+            },
             Step::End => break,
             Step::Err(err) => {
                 println!("{err}");
@@ -34,7 +49,7 @@ pub struct Config {
     path: OsString,
     overflow: Overflow,
     tape_length: usize,
-    window_width: usize,
+    window_width: u16,
     tick_duration: f64,
     output_as_int: bool,
 }
@@ -79,9 +94,9 @@ impl Config {
         Config {
             path,
             overflow: Overflow::Block,
-            tape_length: 64_usize,
-            window_width: 32_usize,
-            tick_duration: 1_f64,
+            tape_length: 64,
+            window_width: 32,
+            tick_duration: 0.02,
             output_as_int: false,
         }
     }
