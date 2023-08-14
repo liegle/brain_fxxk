@@ -14,21 +14,12 @@ use crossterm::{
         KeyCode,
     },
     terminal::{
-        LeaveAlternateScreen,
-        EnterAlternateScreen,
-        DisableLineWrap,
-        EnableLineWrap,
+        self,
+        ClearType,
     },
-    cursor::{
-        Show,
-        Hide,
-        MoveTo,
-        MoveToNextLine,
-        MoveRight, MoveToColumn, SavePosition, RestorePosition,
-    },
+    cursor,
     style::{
-        Print,
-        PrintStyledContent,
+        self,
         Stylize,
     }
 };
@@ -45,11 +36,13 @@ use crate::{
 pub struct Context {
     program: Program,
     program_counter: usize,
-    command_excuted: u32,
+    command_executed: u32,
     tape: Vec<u8>,
     pointer: usize,
     virtual_pointer: i64,
 
+    program_left: usize,
+    tape_left: i64,
     input: String,
     output: String,
 
@@ -73,20 +66,24 @@ impl Context {
             Err(err) => return Err(err.to_string())
         };
 
-        let _screen = match Screen::new(config.window_width) {
+        let _screen = match Screen::new(config.window_width as u16) {
             Ok(screen) => screen,
             Err(err) => return Err(format!("Failed to init screen.{}", err))
         };
 
         let context = Context {
             program,
-            program_counter: 0_usize,
-            command_excuted: 0_u32,
+            program_counter: 0,
+            command_executed: 0,
             tape: vec![0; config.tape_length],
-            pointer: 0_usize,
-            virtual_pointer: 0_i64,
+            pointer: 0,
+            virtual_pointer: 0,
+
+            program_left: 0,
+            tape_left: 0,
             input: String::new(),
             output: String::new(),
+
             config,
             _screen,
         };
@@ -98,13 +95,13 @@ impl Context {
         if self.program_counter == self.program.len() - 1 {
             Step::End
         } else {
-            self.program_counter += 1;
-            self.command_excuted += 1;
+            self.command_executed += 1;
             match self.program.get(self.program_counter) {
                 None => Step::Err("This should not happen!"),
                 Some(key) => match *key {
                     Key::Right => {
                         self.virtual_pointer += 1;
+                        self.program_counter += 1;
                         match self.fix_pointer() {
                             Ok(_) => Step::Next,
                             Err(_) => Step::Err("Overflow exit."),
@@ -112,6 +109,7 @@ impl Context {
                     },
                     Key::Left => {
                         self.virtual_pointer -= 1;
+                        self.program_counter += 1;
                         match self.fix_pointer() {
                             Ok(_) => Step::Next,
                             Err(_) => Step::Err("Overflow exit."),
@@ -119,10 +117,12 @@ impl Context {
                     },
                     Key::Add => {
                         self.tape[self.pointer] += 1;
+                        self.program_counter += 1;
                         Step::Next
                     },
                     Key::Sub => {
                         self.tape[self.pointer] -= 1;
+                        self.program_counter += 1;
                         Step::Next
                     },
                     Key::In => {
@@ -138,21 +138,31 @@ impl Context {
                                 },
                             }
                         }
+                        self.program_counter += 1;
                         Step::Next
                     },
                     Key::Out => {
-                        self.output.push(self.tape[self.pointer] as char);
+                        if self.config.output_as_int {
+                            self.output.push_str(&self.tape[self.pointer].to_string())
+                        } else {
+                            self.output.push(self.tape[self.pointer] as char);
+                        }
+                        self.program_counter += 1;
                         Step::Next
                     },
                     Key::If(index) => {
                         if self.tape[self.pointer] == 0 {
                             self.program_counter = index;
+                        } else {
+                            self.program_counter += 1;
                         }
                         Step::Next
                     },
                     Key::Back(index) => {
                         if self.tape[self.pointer] != 0 {
                             self.program_counter = index;
+                        } else {
+                            self.program_counter += 1;
                         }
                         Step::Next
                     },
@@ -161,8 +171,65 @@ impl Context {
         }
     }
 
-    pub fn refresh(&self) {
-        todo!();
+    pub fn refresh(&mut self) -> Result<(), String> {
+        let width = self.config.window_width;
+        let len = 2 * width as u16;
+
+        if self.program_counter < self.program_left {
+            self.program_left = self.program_counter;
+        } else if self.program_counter >= self.program_left + width {
+            self.program_left = self.program_counter - width + 1;
+        }
+        let program_output = self.program.slice_string(self.program_left, width)?;
+        let program_pin = 2 * (self.program_counter - self.program_left) as u16 + 1;
+        if let Err(err) = queue!(
+            io::stdout(),
+            cursor::MoveTo(1, 1),
+            style::Print(program_output),
+            cursor::MoveTo(0, 2),
+            terminal::Clear(ClearType::CurrentLine),
+            style::Print('│'),
+            cursor::MoveTo(program_pin, 2),
+            style::Print('^'),
+            cursor::MoveTo(len, 2),
+            style::Print('│'),
+            cursor::MoveTo(19, 3),
+            style::Print(self.command_executed),
+        ) { return Err(err.to_string()) }
+
+        let width = width as i64 / 2;
+
+        if self.virtual_pointer < self.tape_left {
+            self.tape_left = self.virtual_pointer;
+        } else if self.virtual_pointer >= self.tape_left + width {
+            self.tape_left = self.virtual_pointer - width + 1;
+        }
+        let tape_output = self.slice_tape(self.tape_left, width);
+        let tape_pin = 4 * (self.virtual_pointer - self.tape_left) as u16 + 2;
+        if let Err(err) = queue!(
+            io::stdout(),
+            cursor::MoveTo(1, 5),
+            style::Print(tape_output),
+            cursor::MoveTo(0, 6),
+            terminal::Clear(ClearType::CurrentLine),
+            style::Print('│'),
+            cursor::MoveTo(tape_pin, 6),
+            style::Print('^'),
+            cursor::MoveTo(len, 6),
+            style::Print('│'),
+        ) { return Err(err.to_string()) }
+
+        if let Err(err) = queue!(
+            io::stdout(),
+            cursor::MoveTo(0, 9),
+            style::Print(&self.input),
+            cursor::MoveTo(0, 12),
+            style::Print(&self.output),
+        ) { return Err(err.to_string()) }
+        if let Err(err) = io::stdout().flush() {
+            return Err(err.to_string())
+        }
+        Ok(())
     }
 
     fn fix_pointer(&mut self) -> Result<(), ()> {
@@ -198,6 +265,24 @@ impl Context {
         }
         Ok(())
     }
+
+    fn slice_tape(&self, left: i64, width: i64) -> String {
+        let mut out = String::new();
+        let tape_range = 0..self.tape.len() as i64;
+        for index in left..left + width {
+            if tape_range.contains(&index) {
+                let num = self.tape[index as usize];
+                out.push((num / 100 + 48) as char);
+                out.push((num % 100 / 10 + 48) as char);
+                out.push((num % 10 + 48) as char);
+            } else {
+                out.push_str("---");
+            }
+            out.push(' ');
+        }
+        out.pop();
+        out
+    }
 }
 
 struct Screen;
@@ -211,26 +296,26 @@ impl Screen {
         }
         queue!(
             io::stdout(),
-            EnterAlternateScreen,
-            Hide,
-            DisableLineWrap,
-            SavePosition,
-            MoveTo(0, 0),
-            Print("┌"), Print(&line), Print("┐"), MoveToColumn(1), PrintStyledContent("Code:".bold()), MoveToNextLine(1),
-            Print("│"), MoveRight(length), Print("│"), MoveToNextLine(1),
-            Print("│"), MoveRight(length), Print("│"), MoveToNextLine(1),
-            Print("└"), Print(&line), Print("┘"), MoveToColumn(1), PrintStyledContent("Exectued commands:".bold()), MoveToNextLine(1),
-            Print("┌"), Print(&line), Print("┐"), MoveToColumn(1), PrintStyledContent("Tape:".bold()), MoveToNextLine(1),
-            Print("│"), MoveRight(length), Print("│"), MoveToNextLine(1),
-            Print("│"), MoveRight(length), Print("│"), MoveToNextLine(1),
-            Print("└"), Print(&line), Print("┘"), MoveToNextLine(1),
-            PrintStyledContent("Input:".bold()), MoveToNextLine(3),
+            terminal::EnterAlternateScreen,
+            cursor::Hide,
+            terminal::DisableLineWrap,
+            cursor::SavePosition,
+            cursor::MoveTo(0, 0),
+            style::Print("┌"), style::Print(&line), style::Print("┐"), cursor::MoveToColumn(1), style::PrintStyledContent("Code:".bold()), cursor::MoveToNextLine(1),
+            style::Print("│"), cursor::MoveRight(length), style::Print("│"), cursor::MoveToNextLine(1),
+            style::Print("│"), cursor::MoveRight(length), style::Print("│"), cursor::MoveToNextLine(1),
+            style::Print("└"), style::Print(&line), style::Print("┘"), cursor::MoveToColumn(1), style::PrintStyledContent("Executed commands:".bold()), cursor::MoveToNextLine(1),
+            style::Print("┌"), style::Print(&line), style::Print("┐"), cursor::MoveToColumn(1), style::PrintStyledContent("Tape:".bold()), cursor::MoveToNextLine(1),
+            style::Print("│"), cursor::MoveRight(length), style::Print("│"), cursor::MoveToNextLine(1),
+            style::Print("│"), cursor::MoveRight(length), style::Print("│"), cursor::MoveToNextLine(1),
+            style::Print("└"), style::Print(&line), style::Print("┘"), cursor::MoveToNextLine(1),
+            style::PrintStyledContent("Input:".bold()), cursor::MoveToNextLine(3),
             //
             //
-            PrintStyledContent("Output:".bold()), MoveToNextLine(3),
+            style::PrintStyledContent("Output:".bold()), cursor::MoveToNextLine(3),
             //
             //
-            Print(" "),
+            style::Print(" "),
         )?;
         io::stdout().flush()?;
         Ok(Screen)
@@ -241,10 +326,10 @@ impl Drop for Screen {
     fn drop(&mut self) {
         let _ = queue!(
             io::stdout(),
-            LeaveAlternateScreen,
-            Show,
-            EnableLineWrap,
-            RestorePosition,
+            terminal::LeaveAlternateScreen,
+            cursor::Show,
+            terminal::EnableLineWrap,
+            cursor::RestorePosition,
         );
         let _ = io::stdout().flush();
     }

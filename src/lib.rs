@@ -15,6 +15,7 @@ use context::{
     Context,
     Step,
 };
+use crossterm::event;
 
 pub fn run(config: Config) {
     let dur = Duration::from_secs_f64(config.tick_duration);
@@ -26,7 +27,10 @@ pub fn run(config: Config) {
     loop {
         match context.step() {
             Step::Next => {
-                context.refresh();
+                if let Err(err) = context.refresh() {
+                    println!("{err}");
+                    process::exit(1);
+                }
                 thread::sleep(dur);
             },
             Step::End => break,
@@ -36,6 +40,7 @@ pub fn run(config: Config) {
             }
         }
     }
+    let _ = event::read();
 }
 
 pub enum Overflow {
@@ -49,7 +54,7 @@ pub struct Config {
     path: OsString,
     overflow: Overflow,
     tape_length: usize,
-    window_width: u16,
+    window_width: usize,
     tick_duration: f64,
     output_as_int: bool,
 }
@@ -58,7 +63,7 @@ const KEY_VALUE_PAIRS: &str = "\
 Keys                      Values\n\
 overflow                  Block | Overflow | Loop | Exit\n\
 tape_length               int in (0, 256]\n\
-window_width              int in (0, 64]\n\
+window_width              int in (0, 64] mod 2\n\
 tick_duration             float in [0, 3]\n\
 output_as_int             true | false";
 
@@ -121,7 +126,11 @@ impl Config {
                 Err(_) => return Err("Wrong tape_length value."),
             },
             "window_width" => match arg_to(key_value[1], 1..=64) {
-                Ok(value) => self.window_width = value,
+                Ok(value) => if value % 2 == 0 {
+                    self.window_width = value;
+                } else {
+                    return Err("Window_width must be mod 2");
+                },
                 Err(_) => return Err("Wrong window_width value."),
             },
             "tick_duration" => match arg_to(key_value[1], 0.0..=3.0) {

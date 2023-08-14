@@ -1,5 +1,3 @@
-use std::fmt::Display;
-
 pub enum Key {
     Right, Left,               // > <
     Add, Sub,                  // + -
@@ -70,9 +68,12 @@ impl Program {
         self.code.len()
     }
 
-    pub fn code_to_string(&self, divider: char, show_jump: bool) -> String {
+    pub fn slice_string(&self, left: usize, width: usize) -> Result<String, &'static str> {
+        if self.code.len() < left + width {
+            return Err("This should not happen!");
+        }
         let mut out = String::new();
-        for key in &self.code {
+        for key in &self.code[left..(left + width)] {
             out.push(match key {
                 Key::Right => '>',
                 Key::Left => '<',
@@ -80,35 +81,12 @@ impl Program {
                 Key::Sub => '-',
                 Key::Out => '.',
                 Key::In => ',',
-                Key::If(value) => {
-                    if show_jump {
-                        out.push('[');
-                        out.push_str(&value.to_string());
-                        out.push(divider);
-                        continue;
-                    } else {
-                        '['
-                    }
-                },
-                Key::Back(value) => {
-                    if show_jump {
-                        out.push(']');
-                        out.push_str(&value.to_string());
-                        out.push(divider);
-                        continue;
-                    } else {
-                        ']'
-                    }
-                },
+                Key::If(_) => '[',
+                Key::Back(_) => ']',
             });
-            out.push(divider);
+            out.push(' ');
         }
-        out
-    }
-}
-
-impl Display for Program {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(&self.code_to_string(' ', false))
+        out.pop();
+        Ok(out)
     }
 }
