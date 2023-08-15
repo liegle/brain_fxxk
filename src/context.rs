@@ -1,34 +1,18 @@
 use std::{
     fs,
-    io::{
-        self,
-        Write,
-    }
+    io::{self, Write}
 };
 
 use crossterm::{
     queue,
-    event::{
-        self,
-        Event,
-        KeyCode,
-    },
-    terminal::{
-        self,
-        ClearType,
-    },
+    event::{self, Event, KeyCode},
+    terminal::{self, ClearType},
     cursor,
-    style::{
-        self,
-        Stylize,
-    }
+    style::{self, Stylize}
 };
 
 use crate::{
-    program::{
-        Program,
-        Key,
-    },
+    program::{Program, Key},
     Config,
     Overflow,
 };
@@ -36,7 +20,7 @@ use crate::{
 pub struct Context {
     program: Program,
     program_counter: usize,
-    command_executed: u32,
+    command_executed: Option<u32>,
     tape: Vec<u8>,
     pointer: usize,
     virtual_pointer: i64,
@@ -52,7 +36,7 @@ pub struct Context {
 
 pub enum Step {
     Next,
-    Err(&'static str),
+    Err(String),
     End,
 }
 
@@ -71,10 +55,10 @@ impl Context {
             Err(err) => return Err(format!("Failed to init screen.{}", err))
         };
 
-        let context = Context {
+        Ok(Context {
             program,
             program_counter: 0,
-            command_executed: 0,
+            command_executed: None,
             tape: vec![0; config.tape_length],
             pointer: 0,
             virtual_pointer: 0,
@@ -86,92 +70,113 @@ impl Context {
 
             config,
             _screen,
-        };
-
-        Ok(context)
+        })
     }
 
     pub fn step(&mut self) -> Step {
-        if self.program_counter == self.program.len() - 1 {
-            Step::End
-        } else {
-            self.command_executed += 1;
-            match self.program.get(self.program_counter) {
-                None => Step::Err("This should not happen!"),
-                Some(key) => match *key {
-                    Key::Right => {
-                        self.virtual_pointer += 1;
-                        self.program_counter += 1;
-                        match self.fix_pointer() {
-                            Ok(_) => Step::Next,
-                            Err(_) => Step::Err("Overflow exit."),
+        if self.program_counter == self.program.len() {
+            return Step::End;
+        }
+        let step = match self.command_executed {
+            None => {
+                self.command_executed = Some(0);
+                Step::Next
+            },
+            Some(n) => {
+                self.command_executed = Some(n + 1);
+                self.command()
+            },
+        };
+        match self.refresh() {
+            Ok(_) => step,
+            Err(err) => Step::Err(err),
+        }
+    }
+
+    fn command(&mut self) -> Step {
+        match self.program.get(self.program_counter) {
+            None => Step::Err(String::from("This should not happen!")),
+            Some(key) => match *key {
+                Key::Right => {
+                    self.virtual_pointer += 1;
+                    self.program_counter += 1;
+                    match self.fix_pointer() {
+                        Ok(_) => Step::Next,
+                        Err(_) => Step::Err(String::from("Overflow exit.")),
+                    }
+                },
+                Key::Left => {
+                    self.virtual_pointer -= 1;
+                    self.program_counter += 1;
+                    match self.fix_pointer() {
+                        Ok(_) => Step::Next,
+                        Err(_) => Step::Err(String::from("Overflow exit.")),
+                    }
+                },
+                Key::Add => {
+                    match self.tape[self.pointer] {
+                        u8::MAX => self.tape[self.pointer] = 0,
+                        _ => self.tape[self.pointer] += 1,
+                    }
+                    self.program_counter += 1;
+                    Step::Next
+                },
+                Key::Sub => {
+                    match self.tape[self.pointer] {
+                        0 => self.tape[self.pointer] = u8::MAX,
+                        _ => self.tape[self.pointer] -= 1,
+                    }
+                    self.program_counter += 1;
+                    Step::Next
+                },
+                Key::In => {
+                    loop {
+                        match event::read() {
+                            Err(_) => return Step::Err(String::from("Failed to read event.")),
+                            Ok(e) => if let Event::Key(key) = e {
+                                if let KeyCode::Char(ch) = key.code {
+                                    self.tape[self.pointer] = ch as u8;
+                                    self.input.push(ch);
+                                    break;
+                                }
+                            },
                         }
-                    },
-                    Key::Left => {
-                        self.virtual_pointer -= 1;
+                    }
+                    let _ = event::read();// 按一次键盘会有两个 event，不知道是不是 bug
+                    self.program_counter += 1;
+                    Step::Next
+                },
+                Key::Out => {
+                    if self.config.output_as_int {
+                        self.output.push_str(&self.tape[self.pointer].to_string());
+                        self.output.push(' ');
+                    } else {
+                        self.output.push(self.tape[self.pointer] as char);
+                    }
+                    self.program_counter += 1;
+                    Step::Next
+                },
+                Key::If(index) => {
+                    if self.tape[self.pointer] == 0 {
+                        self.program_counter = index;
+                    } else {
                         self.program_counter += 1;
-                        match self.fix_pointer() {
-                            Ok(_) => Step::Next,
-                            Err(_) => Step::Err("Overflow exit."),
-                        }
-                    },
-                    Key::Add => {
-                        self.tape[self.pointer] += 1;
+                    }
+                    Step::Next
+                },
+                Key::Back(index) => {
+                    if self.tape[self.pointer] != 0 {
+                        self.program_counter = index;
+                    } else {
                         self.program_counter += 1;
-                        Step::Next
-                    },
-                    Key::Sub => {
-                        self.tape[self.pointer] -= 1;
-                        self.program_counter += 1;
-                        Step::Next
-                    },
-                    Key::In => {
-                        loop {
-                            match event::read() {
-                                Err(_) => return Step::Err("Failed to read event."),
-                                Ok(e) => if let Event::Key(key) = e {
-                                    if let KeyCode::Char(ch) = key.code {
-                                        self.tape[self.pointer] = ch as u8;
-                                        self.input.push(ch);
-                                        break;
-                                    }
-                                },
-                            }
-                        }
-                        self.program_counter += 1;
-                        Step::Next
-                    },
-                    Key::Out => {
-                        if self.config.output_as_int {
-                            self.output.push_str(&self.tape[self.pointer].to_string())
-                        } else {
-                            self.output.push(self.tape[self.pointer] as char);
-                        }
-                        self.program_counter += 1;
-                        Step::Next
-                    },
-                    Key::If(index) => {
-                        if self.tape[self.pointer] == 0 {
-                            self.program_counter = index;
-                        } else {
-                            self.program_counter += 1;
-                        }
-                        Step::Next
-                    },
-                    Key::Back(index) => {
-                        if self.tape[self.pointer] != 0 {
-                            self.program_counter = index;
-                        } else {
-                            self.program_counter += 1;
-                        }
-                        Step::Next
-                    },
-                }
+                    }
+                    Step::Next
+                },
             }
         }
     }
 
-    pub fn refresh(&mut self) -> Result<(), String> {
+    fn refresh(&mut self) -> Result<(), String> {
         let width = self.config.window_width;
         let len = 2 * width as u16;
 
@@ -180,10 +185,12 @@ impl Context {
         } else if self.program_counter >= self.program_left + width {
             self.program_left = self.program_counter - width + 1;
         }
-        let program_output = self.program.slice_string(self.program_left, width)?;
+        let program_output = self.program.slice_string(self.program_left, width);
         let program_pin = 2 * (self.program_counter - self.program_left) as u16 + 1;
         if let Err(err) = queue!(
             io::stdout(),
+            cursor::MoveTo(7, 0),
+            style::Print(self.program_counter),
             cursor::MoveTo(1, 1),
             style::Print(program_output),
             cursor::MoveTo(0, 2),
@@ -193,8 +200,8 @@ impl Context {
             style::Print('^'),
             cursor::MoveTo(len, 2),
             style::Print('│'),
-            cursor::MoveTo(19, 3),
-            style::Print(self.command_executed),
+            cursor::MoveTo(20, 3),
+            style::Print(self.command_executed.unwrap_or_else(|| 0)),
         ) { return Err(err.to_string()) }
 
         let width = width as i64 / 2;
@@ -208,6 +215,8 @@ impl Context {
         let tape_pin = 4 * (self.virtual_pointer - self.tape_left) as u16 + 2;
         if let Err(err) = queue!(
             io::stdout(),
+            cursor::MoveTo(7, 4),
+            style::Print(self.virtual_pointer),
             cursor::MoveTo(1, 5),
             style::Print(tape_output),
             cursor::MoveTo(0, 6),
@@ -226,6 +235,7 @@ impl Context {
             cursor::MoveTo(0, 12),
             style::Print(&self.output),
         ) { return Err(err.to_string()) }
+        
         if let Err(err) = io::stdout().flush() {
             return Err(err.to_string())
         }
@@ -299,13 +309,12 @@ impl Screen {
             terminal::EnterAlternateScreen,
             cursor::Hide,
             terminal::DisableLineWrap,
-            cursor::SavePosition,
             cursor::MoveTo(0, 0),
-            style::Print("┌"), style::Print(&line), style::Print("┐"), cursor::MoveToColumn(1), style::PrintStyledContent("Code:".bold()), cursor::MoveToNextLine(1),
+            style::Print("┌"), style::Print(&line), style::Print("┐"), cursor::MoveToColumn(1), style::PrintStyledContent("Code@ ".bold()), cursor::MoveToNextLine(1),
             style::Print("│"), cursor::MoveRight(length), style::Print("│"), cursor::MoveToNextLine(1),
             style::Print("│"), cursor::MoveRight(length), style::Print("│"), cursor::MoveToNextLine(1),
-            style::Print("└"), style::Print(&line), style::Print("┘"), cursor::MoveToColumn(1), style::PrintStyledContent("Executed commands:".bold()), cursor::MoveToNextLine(1),
-            style::Print("┌"), style::Print(&line), style::Print("┐"), cursor::MoveToColumn(1), style::PrintStyledContent("Tape:".bold()), cursor::MoveToNextLine(1),
+            style::Print("└"), style::Print(&line), style::Print("┘"), cursor::MoveToColumn(1), style::PrintStyledContent("Executed commands: ".bold()), cursor::MoveToNextLine(1),
+            style::Print("┌"), style::Print(&line), style::Print("┐"), cursor::MoveToColumn(1), style::PrintStyledContent("Tape@ ".bold()), cursor::MoveToNextLine(1),
             style::Print("│"), cursor::MoveRight(length), style::Print("│"), cursor::MoveToNextLine(1),
             style::Print("│"), cursor::MoveRight(length), style::Print("│"), cursor::MoveToNextLine(1),
             style::Print("└"), style::Print(&line), style::Print("┘"), cursor::MoveToNextLine(1),
@@ -329,7 +338,6 @@ impl Drop for Screen {
             terminal::LeaveAlternateScreen,
             cursor::Show,
             terminal::EnableLineWrap,
-            cursor::RestorePosition,
         );
         let _ = io::stdout().flush();
     }

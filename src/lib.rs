@@ -1,53 +1,47 @@
-mod program;
 mod context;
+mod program;
 
 use std::{
-    env::ArgsOs,
-    ffi::OsString,
-    ops::RangeBounds,
-    str::FromStr,
-    process,
-    thread,
-    time::Duration,
+    env::ArgsOs, ffi::OsString, ops::RangeBounds, process, str::FromStr, thread, time::Duration,
 };
 
-use context::{
-    Context,
-    Step,
-};
-use crossterm::event;
+use context::{Context, Step};
+use crossterm::event::{self, Event, KeyCode};
 
 pub fn run(config: Config) {
     let dur = Duration::from_secs_f64(config.tick_duration);
     let mut context = Context::new(config).unwrap_or_else(|err| {
-        println!("{err}");
+        eprintln!("{err}");
         process::exit(1);
     });
 
     loop {
         match context.step() {
-            Step::Next => {
-                if let Err(err) = context.refresh() {
-                    println!("{err}");
-                    process::exit(1);
-                }
-                thread::sleep(dur);
-            },
+            Step::Next => thread::sleep(dur),
             Step::End => break,
             Step::Err(err) => {
-                println!("{err}");
+                eprintln!("{err}");
                 process::exit(1);
             }
         }
     }
-    let _ = event::read();
+
+    loop {
+        if let Ok(e) = event::read() {
+            if let Event::Key(key) = e {
+                if let KeyCode::Esc = key.code {
+                    break;
+                }
+            }
+        }
+    }
 }
 
 pub enum Overflow {
-    Block,     // 指针在边界向外移动时，什么也不发生
-    Overflow,  // 指针能移动到边界外，但实际读写的是边界的内存
-    Loop,      // 循环移动指针
-    Exit,      // 指针在边界向外移动时，立即报错退出
+    Block,    // 指针在边界向外移动时，什么也不发生
+    Overflow, // 指针能移动到边界外，但实际读写的是边界的内存
+    Loop,     // 循环移动指针
+    Exit,     // 指针在边界向外移动时，立即报错退出
 }
 
 pub struct Config {
@@ -63,7 +57,7 @@ const KEY_VALUE_PAIRS: &str = "\
 Keys                      Values\n\
 overflow                  Block | Overflow | Loop | Exit\n\
 tape_length               int in (0, 256]\n\
-window_width              int in (0, 64] mod 2\n\
+window_width              even int in (0, 64]\n\
 tick_duration             float in [0, 3]\n\
 output_as_int             true | false";
 
@@ -71,25 +65,39 @@ impl Config {
     pub fn new(mut args: ArgsOs) -> Result<Config, String> {
         args.next();
         let path = match args.next() {
-            Some(arg) => if arg == "help" {
-                return Err(String::from(KEY_VALUE_PAIRS))
-            } else {
-                arg
-            },
-            None => return Err(String::from("\
+            Some(arg) => {
+                if arg == "help" {
+                    return Err(String::from(KEY_VALUE_PAIRS));
+                } else {
+                    arg
+                }
+            }
+            None => {
+                return Err(String::from(
+                    "\
             Didn't find brainfxxk source file!\n\
             Usage: brain_fxxker.exe <file_path> <key>=<value> <...>\n\
-            For more information, use brain_fxxker.exe help.")),
+            For more information, use brain_fxxker.exe help.",
+                ))
+            }
         };
 
         let mut config = Config::default(path);
         for arg in args {
             let arg = match arg.clone().into_string() {
                 Ok(result) => result,
-                Err(_) => return Err(format!("Parameters shouldn't contain not unicode characters in \"{:?}\"!", arg)),
+                Err(_) => {
+                    return Err(format!(
+                        "Parameters shouldn't contain not unicode characters in \"{:?}\"!",
+                        arg
+                    ))
+                }
             };
             if let Err(discription) = config.parse(&arg) {
-                return Err(format!("Parameter syntax error in \"{}\"! {}", arg, discription));
+                return Err(format!(
+                    "Parameter syntax error in \"{}\"! {}",
+                    arg, discription
+                ));
             }
         }
         Ok(config)
@@ -119,6 +127,7 @@ impl Config {
                 "block" => Overflow::Block,
                 "overflow" => Overflow::Overflow,
                 "exit" => Overflow::Exit,
+                "loop" => Overflow::Loop,
                 _ => return Err("Wrong overflow value."),
             },
             "tape_length" => match arg_to(key_value[1], 1..=256) {
@@ -129,7 +138,7 @@ impl Config {
                 Ok(value) => if value % 2 == 0 {
                     self.window_width = value;
                 } else {
-                    return Err("Window_width must be mod 2");
+                    return Err("Window_width must be even");
                 },
                 Err(_) => return Err("Wrong window_width value."),
             },

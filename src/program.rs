@@ -1,8 +1,12 @@
 pub enum Key {
-    Right, Left,               // > <
-    Add, Sub,                  // + -
-    Out, In,                   // . ,
-    If(usize), Back(usize),    // [ ]
+    Right,
+    Left, // > <
+    Add,
+    Sub, // + -
+    Out,
+    In, // . ,
+    If(usize),
+    Back(usize), // [ ]
 }
 
 pub struct Program {
@@ -28,9 +32,9 @@ impl Program {
                         Key::If(_) => {
                             code.pop();
                             continue;
-                        },
+                        }
                         _ => Key::Back(0),
-                    }
+                    },
                     None => return syntax_error,
                 },
                 _ => continue,
@@ -68,12 +72,10 @@ impl Program {
         self.code.len()
     }
 
-    pub fn slice_string(&self, left: usize, width: usize) -> Result<String, &'static str> {
-        if self.code.len() < left + width {
-            return Err("This should not happen!");
-        }
+    pub fn slice_string(&self, left: usize, width: usize) -> String {
+        let right = self.code.len().min(left + width);
         let mut out = String::new();
-        for key in &self.code[left..(left + width)] {
+        for key in &self.code[left..right] {
             out.push(match key {
                 Key::Right => '>',
                 Key::Left => '<',
@@ -86,7 +88,15 @@ impl Program {
             });
             out.push(' ');
         }
+
+        let diff = left + width - right;
+        if diff > 0 {
+            for _ in 0..diff {
+                out.push_str("  ");
+            }
+        }
+
         out.pop();
-        Ok(out)
+        out
     }
 }
